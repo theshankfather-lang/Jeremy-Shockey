@@ -1,3 +1,33 @@
+function Get-NowET {
+  # Try Windows TZ, then IANA. If both fail, approximate ET from UTC.
+  try {
+    \ = \
+    try { \ = [System.TimeZoneInfo]::FindSystemTimeZoneById("Eastern Standard Time") } catch {}
+    if (-not \) { try { \ = [System.TimeZoneInfo]::FindSystemTimeZoneById("America/New_York") } catch {} }
+    if (\) { return [System.TimeZoneInfo]::ConvertTime([DateTime]::UtcNow, \) }
+
+    # Fallback: approximate ET with DST (second Sun in Mar @02:00 to first Sun in Nov @02:00)
+    \  = [DateTime]::UtcNow
+    \ = \.Year
+
+    function Get-NthWeekdayOfMonth([int]\,[int]\,[System.DayOfWeek]\,[int]\) {
+      \ = Get-Date -Year \ -Month \ -Day 1 -Hour 2 -Minute 0
+      \ = (([int]\ - [int]\.DayOfWeek + 7) % 7)
+      \  = \.AddDays(\)
+      return \.AddDays(7*(\-1))
+    }
+    function Get-FirstWeekdayOfMonth([int]\,[int]\,[System.DayOfWeek]\) {
+      Get-NthWeekdayOfMonth -y \ -m \ -dow \ -nth 1
+    }
+
+    \    = Get-NthWeekdayOfMonth -y \ -m 3  -dow ([System.DayOfWeek]::Sunday) -nth 2
+    \      = Get-FirstWeekdayOfMonth -y \ -m 11 -dow ([System.DayOfWeek]::Sunday)
+    \ = if (\ -ge \ -and \ -lt \) { -4 } else { -5 }
+    return \.AddHours(\)
+  } catch {
+    return [DateTime]::UtcNow
+  }
+}
 # Jeremy-Shockey (baseline sanity script)
 # - Loads env vars
 # - Sends a boot test message to CHAN_WEEKLY_MATCHUPS
@@ -25,11 +55,7 @@ $GUILD_ID             = $env:GUILD_ID
 $CHAN_WEEKLY_MATCHUPS = $env:CHAN_WEEKLY_MATCHUPS
 
 # ========= TIME HELPERS (ET) =========
-function Get-NowET {
-  # Try Windows TZ first, then IANA. If both fail, approximate ET from UTC.
-  try {
-    $tz = $null
-    try { $tz = [System.TimeZoneInfo]::FindSystemTimeZoneById("Eastern Standard Time") } catch {}
+ catch {}
     if (-not $tz) { try { $tz = [System.TimeZoneInfo]::FindSystemTimeZoneById("America/New_York") } catch {} }
     if ($tz) { return [System.TimeZoneInfo]::ConvertTime([DateTime]::UtcNow, $tz) }
 
@@ -55,7 +81,7 @@ function Get-NowET {
     return [DateTime]::UtcNow
   }
 } catch {}
-    if (-not $tz) { try { $tz = [System.TimeZoneInfo]::FindSystemTimeZoneById(''America/New_York'') } catch {} }
+    if (-not $tz) { try { $tz = [System.TimeZoneInfo]::FindSystemTimeZoneById("America/New_York") } catch {} }
     if ($tz) {
       return [System.TimeZoneInfo]::ConvertTime([DateTime]::UtcNow, $tz)
     }
@@ -151,5 +177,6 @@ while ($true) {
   }
   Start-Sleep -Seconds 1
 }
+
 
 
