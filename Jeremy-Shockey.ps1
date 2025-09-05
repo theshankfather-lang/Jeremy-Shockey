@@ -36,6 +36,53 @@ function Start-DiscordPresence {
     $idBytes = [Text.Encoding]::UTF8.GetBytes($identify)
     [void]$ws.SendAsync([ArraySegment[byte]]::new($idBytes),[System.Net.WebSockets.WebSocketMessageType]::Text,$true,[Threading.CancellationToken]::None).Wait()
 
+    # Heartbeat (op 1)
+    $last = [DateTime]::UtcNow; $seq = $null
+    while ($ws.State -eq [System.Net.WebSockets.WebSocketState]::Open) {
+      if (([DateTime]::UtcNow - $last).TotalMilliseconds -ge $interval) {
+        $hb = @{ op = 1; d = $seq } | ConvertTo-Json
+        $hbBytes = [Text.Encoding]::UTF8.GetBytes($hb)
+        [void]$ws.SendAsync([ArraySegment[byte]]::new($hbBytes),[System.Net.WebSockets.WebSocketMessageType]::Text,$true,[Threading.CancellationToken]::None).Wait()
+        $last = [DateTime]::UtcNow
+      }
+      Start-Sleep -Milliseconds 200
+    }
+  } # end scriptblock
+  Try { Get-Job -Name "discord-presence" -ErrorAction Stop | Remove-Job -Force } Catch {}
+  Start-Job -Name "discord-presence" -ScriptBlock $sb -ArgumentList $Token,$ActivityName,$Status | Out-Null
+  Write-Host "Gateway presence job started (status: $Status, activity: $ActivityName)." -ForegroundColor Green
+}
+
+catch {}
+    $ws  = [System.Net.WebSockets.ClientWebSocket]::new()
+    $uri = [Uri]"wss://gateway.discord.gg/?v=10&encoding=json"
+    $ws.ConnectAsync($uri,[Threading.CancellationToken]::None).Wait()
+
+    # Receive HELLO (op 10)
+    $buf = New-Object byte[] 8192
+    $res = $ws.ReceiveAsync([ArraySegment[byte]]::new($buf),[Threading.CancellationToken]::None).Result
+    $txt = [Text.Encoding]::UTF8.GetString($buf,0,$res.Count)
+    $hello = $null; try { $hello = $txt | ConvertFrom-Json } catch {}
+    $interval = if ($hello -and $hello.d -and $hello.d.heartbeat_interval) { [int]$hello.d.heartbeat_interval } else { 41250 }
+
+    # IDENTIFY (op 2) with presence (no privileged intents)
+    $identify = @{
+      op = 2
+      d  = @{
+        token      = $Token
+        intents    = 0
+        properties = @{ os="linux"; browser="powershell"; device="powershell" }
+        presence   = @{
+          status     = $Status
+          activities = @(@{ name = $ActivityName; type = 0 })
+          since      = $null
+          afk        = $false
+        }
+      }
+    } | ConvertTo-Json -Depth 8
+    $idBytes = [Text.Encoding]::UTF8.GetBytes($identify)
+    [void]$ws.SendAsync([ArraySegment[byte]]::new($idBytes),[System.Net.WebSockets.WebSocketMessageType]::Text,$true,[Threading.CancellationToken]::None).Wait()
+
     # Heartbeat loop (op 1)
     $last = [DateTime]::UtcNow; $seq = $null
     while ($ws.State -eq [System.Net.WebSockets.WebSocketState]::Open) {
@@ -204,6 +251,7 @@ while ($true) {
   Start-Job -Name "discord-presence" -ScriptBlock $sb -ArgumentList $Token,$ActivityName,$Status | Out-Null
   Write-Host "Gateway presence job started (status: $Status, activity: $ActivityName)." -ForegroundColor Green
 }
+
 
 
 
