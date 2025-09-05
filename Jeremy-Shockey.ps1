@@ -26,7 +26,42 @@ $CHAN_WEEKLY_MATCHUPS = $env:CHAN_WEEKLY_MATCHUPS
 
 # ========= TIME HELPERS (ET) =========
 function Get-NowET {
-  try { $tz = [System.TimeZoneInfo]::FindSystemTimeZoneById('Eastern Standard Time') }
+  # Try Windows TZ first, then IANA. If both fail (e.g., tzdata missing),
+  # fall back to UTC and approximate US Eastern using a simple DST rule.
+  try {
+    $tz = $null
+    try { $tz = [System.TimeZoneInfo]::FindSystemTimeZoneById(''Eastern Standard Time'') } catch {}
+    if (-not $tz) { try { $tz = [System.TimeZoneInfo]::FindSystemTimeZoneById(''America/New_York'') } catch {} }
+    if ($tz) {
+      return [System.TimeZoneInfo]::ConvertTime([DateTime]::UtcNow, $tz)
+    }
+
+    # Fallback: approximate ET from UTC with a basic US DST rule.
+    # Second Sunday in March @ 02:00 to first Sunday in November @ 02:00 is DST (UTC-4), else UTC-5.
+    $utc = [DateTime]::UtcNow
+    $year = $utc.Year
+
+    function Get-NthWeekdayOfMonth([int]$y,[int]$m,[System.DayOfWeek]$dow,[int]$nth) {
+      $d = Get-Date -Year $y -Month $m -Day 1 -Hour 2 -Minute 0 -Second 0 -Millisecond 0
+      $offset = (($dow - $d.DayOfWeek + 7) % 7)
+      $first = $d.AddDays($offset)
+      return $first.AddDays(7*($nth-1))
+    }
+    function Get-FirstWeekdayOfMonth([int]$y,[int]$m,[System.DayOfWeek]$dow) {
+      Get-NthWeekdayOfMonth -y $y -m $m -dow $dow -nth 1
+    }
+
+    $dstStart = Get-NthWeekdayOfMonth -y $year -m 3 -dow ([System.DayOfWeek]::Sunday) -nth 2  # Mar, 2nd Sunday 02:00
+    $dstEnd   = Get-FirstWeekdayOfMonth -y $year -m 11 -dow ([System.DayOfWeek]::Sunday)      # Nov, 1st Sunday 02:00
+
+    # If utc is outside [dstStart..dstEnd), use UTC-5; otherwise UTC-4
+    $offsetHours = if ($utc -ge $dstStart -and $utc -lt $dstEnd) { -4 } else { -5 }
+    return $utc.AddHours($offsetHours)
+  } catch {
+    # Last-resort: just return UTC so it never breaks
+    return [DateTime]::UtcNow
+  }
+}
   catch { $tz = [System.TimeZoneInfo]::FindSystemTimeZoneById('America/New_York') }
   [System.TimeZoneInfo]::ConvertTime([DateTime]::UtcNow, $tz)
 }
@@ -92,3 +127,4 @@ while ($true) {
   }
   Start-Sleep -Seconds 1
 }
+
