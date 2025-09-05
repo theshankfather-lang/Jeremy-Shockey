@@ -88,6 +88,7 @@ try {
 
 # ===== HEARTBEAT LOOP =====
 $nextHeartbeat = ((Get-NowET) ?? (Get-Date)).AddMinutes(5)
+Start-DiscordPresence -Token $DISCORD_TOKEN -ActivityName "ESPN Fantasy" -Status "online"
 Write-Host "Jeremy Shockey baseline loop started." -ForegroundColor Cyan
 while ($true) {
   $now = (Get-NowET)
@@ -98,3 +99,65 @@ while ($true) {
   }
   Start-Sleep -Seconds 1
 }
+# ===== DISCORD GATEWAY PRESENCE (online status) =====
+function Start-DiscordPresence {
+  param(
+    [Parameter(Mandatory=$true)][string]$Token,
+    [string]$ActivityName = "Fantasy Football",
+    [string]$Status = "online"
+  )
+  $sb = {
+    param($Token,$ActivityName,$Status)
+    try {
+      Add-Type -AssemblyName System.Net.WebSockets
+    } catch {}
+    $ws  = [System.Net.WebSockets.ClientWebSocket]::new()
+    $uri = [Uri]"wss://gateway.discord.gg/?v=10&encoding=json"
+
+    # Connect to gateway
+    $ws.ConnectAsync($uri,[Threading.CancellationToken]::None).Wait()
+
+    # Receive HELLO (op 10)
+    $buf = New-Object byte[] 8192
+    $res = $ws.ReceiveAsync([ArraySegment[byte]]::new($buf),[Threading.CancellationToken]::None).Result
+    $txt = [Text.Encoding]::UTF8.GetString($buf,0,$res.Count)
+    $hello = $null
+    try { $hello = $txt | ConvertFrom-Json } catch {}
+    $interval = if ($hello -and $hello.d -and $hello.d.heartbeat_interval) { [int]$hello.d.heartbeat_interval } else { 41250 } # ms
+
+    # IDENTIFY (op 2) with presence
+    $identify = @{
+      op = 2
+      d  = @{
+        token      = $Token
+        intents    = 0
+        properties = @{ os="windows"; browser="powershell"; device="powershell" }
+        presence   = @{
+          status     = $Status
+          activities = @(@{ name = $ActivityName; type = 0 })
+          since      = $null
+          afk        = $false
+        }
+      }
+    } | ConvertTo-Json -Depth 8
+    $idBytes = [Text.Encoding]::UTF8.GetBytes($identify)
+    [void]$ws.SendAsync([ArraySegment[byte]]::new($idBytes),[System.Net.WebSockets.WebSocketMessageType]::Text,$true,[Threading.CancellationToken]::None).Wait()
+
+    # Heartbeat loop (op 1). We don't need to read events for presence to remain online.
+    $last = [DateTime]::UtcNow
+    $seq  = $null
+    while ($ws.State -eq [System.Net.WebSockets.WebSocketState]::Open) {
+      if (([DateTime]::UtcNow - $last).TotalMilliseconds -ge $interval) {
+        $hb = @{ op = 1; d = $seq } | ConvertTo-Json
+        $hbBytes = [Text.Encoding]::UTF8.GetBytes($hb)
+        [void]$ws.SendAsync([ArraySegment[byte]]::new($hbBytes),[System.Net.WebSockets.WebSocketMessageType]::Text,$true,[Threading.CancellationToken]::None).Wait()
+        $last = [DateTime]::UtcNow
+      }
+      Start-Sleep -Milliseconds 200
+    }
+  }
+  Try { Get-Job -Name "discord-presence" -ErrorAction Stop | Remove-Job -Force } Catch {}
+  Start-Job -Name "discord-presence" -ScriptBlock $sb -ArgumentList $Token,$ActivityName,$Status | Out-Null
+  Write-Host "Gateway presence job started (status: $Status, activity: $ActivityName)." -ForegroundColor Green
+}
+
