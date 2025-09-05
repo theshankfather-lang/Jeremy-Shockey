@@ -161,3 +161,4 @@ function Start-DiscordPresence {
   Write-Host "Gateway presence job started (status: $Status, activity: $ActivityName)." -ForegroundColor Green
 }
 
+
